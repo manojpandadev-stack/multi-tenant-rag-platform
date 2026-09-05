@@ -1,7 +1,6 @@
 # DocMind Pro
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
-<!-- Replace OWNER/REPO with the real GitHub repo once it's pushed (see .github/workflows/ci.yml). -->
+[![CI](https://github.com/manojpandadev-stack/multi-tenant-rag-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/manojpandadev-stack/multi-tenant-rag-platform/actions/workflows/ci.yml)
 
 **A multi-tenant document Q&A platform where organizations upload documents and ask natural-language questions answered via Retrieval-Augmented Generation (RAG) — with strict data isolation, hybrid search, semantic caching, and full observability.**
 
