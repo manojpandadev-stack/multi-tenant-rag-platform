@@ -20,10 +20,10 @@ graph TB
 
     subgraph "Ingestion Pipeline"
         UPLOAD[Upload Endpoint]
-        KAFKA{{Kafka — document-uploaded topic<br/>(KRaft, event-driven trigger)}}
+        KAFKA{{"Kafka — document-uploaded topic<br/>(KRaft, event-driven trigger)"}}
         PIPE[Consumer → Pipeline<br/>@Async fallback mode available]
         EXTRACT[Text Extraction — PDFBox / POI / TXT]
-        CHUNK[Recursive Char Splitter — 512 chars, 50 overlap]
+        CHUNK["Recursive Char Splitter — 512 chars, 50 overlap"]
         EMBED[LangChain4j + OpenAI text-embedding-3-small]
     end
 
@@ -37,12 +37,12 @@ graph TB
     end
 
     subgraph "Cost Optimization"
-        CACHE[Semantic Cache — Postgres cosine scan, threshold 0.95]
+        CACHE["Semantic Cache — Postgres cosine scan, threshold 0.95"]
     end
 
     subgraph "Data Layer"
         PG[(PostgreSQL 16 + pgvector)]
-        S3[(S3 Object Storage — LocalStack dev / real AWS prod<br/>tenant prefix: org/{orgId}/...)]
+        S3[("S3 Object Storage — LocalStack dev / real AWS prod<br/>tenant prefix: org/{orgId}/...")]
     end
 
     subgraph "Observability"
@@ -56,7 +56,7 @@ graph TB
     end
 
     GW --> AUTH --> TENANT
-    TENANT --> UPLOAD -->|store file bytes<br/>key = org/{orgId}/{file}| S3
+    TENANT --> UPLOAD -->|"store file bytes<br/>key = org/{orgId}/{file}"| S3
     TENANT --> UPLOAD -->|publish DocumentUploadedEvent<br/>after commit| KAFKA --> PIPE --> EXTRACT --> CHUNK --> EMBED --> PG
     EXTRACT -.->|retrieve bytes<br/>from storage| S3
     TENANT --> CACHE
