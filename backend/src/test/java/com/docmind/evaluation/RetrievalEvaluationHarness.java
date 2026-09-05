@@ -46,7 +46,11 @@ class RetrievalEvaluationHarness {
         registry.add("spring.datasource.url", pg::getJdbcUrl);
         registry.add("spring.datasource.username", pg::getUsername);
         registry.add("spring.datasource.password", pg::getPassword);
-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+        // "create" (NOT "create-drop"): the drop-at-close phase borrows a Hikari
+        // connection after the Testcontainers container is already stopped,
+        // blocking 30s (Hikari connectionTimeout) -> Surefire kills the forked
+        // JVM -> CI exits 1. Containers are ephemeral, so nothing needs dropping.
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create");
         registry.add("spring.sql.init.mode", () -> "always");
         registry.add("spring.liquibase.enabled", () -> "false");
     }

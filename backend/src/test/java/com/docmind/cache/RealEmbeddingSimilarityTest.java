@@ -24,6 +24,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * Measures real OpenAI embedding quality:
@@ -68,7 +69,11 @@ class RealEmbeddingSimilarityTest {
         registry.add("spring.datasource.url", pg::getJdbcUrl);
         registry.add("spring.datasource.username", pg::getUsername);
         registry.add("spring.datasource.password", pg::getPassword);
-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+        // "create" (NOT "create-drop"): the drop-at-close phase borrows a Hikari
+        // connection after the Testcontainers container is already stopped,
+        // blocking 30s (Hikari connectionTimeout) -> Surefire kills the forked
+        // JVM -> CI exits 1. Containers are ephemeral, so nothing needs dropping.
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create");
         registry.add("spring.sql.init.mode", () -> "always");
         registry.add("spring.liquibase.enabled", () -> "false");
         // Reduce retries for test speed
@@ -84,6 +89,22 @@ class RealEmbeddingSimilarityTest {
     @Autowired private SemanticCacheService cacheService;
     @Autowired private HybridSearchService hybridSearchService;
     @Autowired private TestDataCleaner cleaner;
+
+    @Autowired private EmbeddingModel embeddingModel;
+
+    /**
+     * Deterministic no-API-key degradation. Without OPENAI_API_KEY the
+     * NoOpEmbeddingModel hands out RANDOM vectors, so cosine similarities are
+     * statistical noise (std ~0.026 for random 1536-dim pairs). The old
+     * "sim < 0.01 -> skip" guards were probabilistic and could let the
+     * >0.85 assertions fire on noise. Checking the model type is exact:
+     * these tests report SKIPPED under NoOp instead of flaking in CI.
+     */
+    private void requireRealEmbeddingModel() {
+        assumeFalse(embeddingModel instanceof com.docmind.config.NoOpEmbeddingModel,
+            "No OPENAI_API_KEY — NoOp random-vector model in use; "
+                + "skipping embedding-quality assertions (pipeline structure still exercised)");
+    }
 
     private Organization evalOrg;
 
@@ -109,6 +130,7 @@ class RealEmbeddingSimilarityTest {
     @Test
     @DisplayName("Real embeddings: cosine similarity between paraphrased query pairs")
     void cacheSimilarityWithRealEmbeddings() {
+        requireRealEmbeddingModel();
         System.out.println("\n=== CACHE SIMILARITY: REAL OPENAI EMBEDDINGS ===");
         System.out.println("Model: text-embedding-3-small (1536-dim)\n");
 
@@ -229,6 +251,7 @@ class RealEmbeddingSimilarityTest {
     @Test
     @DisplayName("Real embeddings: cache hit for paraphrased query, miss for dissimilar")
     void cacheHitMissWithRealEmbeddings() {
+        requireRealEmbeddingModel();
         System.out.println("\n=== CACHE HIT/MISS: REAL EMBEDDINGS ===");
 
         String originalQuery = "What is the maximum file size?";
@@ -272,6 +295,7 @@ class RealEmbeddingSimilarityTest {
     @Test
     @DisplayName("Real embeddings: retrieval hit rates for vector-only vs hybrid")
     void retrievalHitRates() {
+        requireRealEmbeddingModel();
         System.out.println("\n=== RETRIEVAL EVAL: REAL OPENAI EMBEDDINGS ===");
 
         chunkRepository.deleteAll();
