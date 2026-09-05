@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # Test stage: compile -> unit tests -> integration tests
+  # Integration tests use Testcontainers, which needs a Docker
+  # daemon. GitHub-hosted ubuntu runners expose one by default.
+  # ============================================================
+  test:
+    name: Compile -> Unit -> Integration (Testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # Stage 1 — compile (fail fast before running any tests)
+      - name: Compile main + test sources
+        working-directory: backend
+        run: mvn -B -ntp -DskipTests test-compile
+
+      # Stage 2 — unit tests (no Docker required).
+      # The Testcontainers-backed classes are tagged @Tag("integration");
+      # the exclusion keeps this stage fast and Docker-free.
+      - name: Unit tests
+        working-directory: backend
+        run: mvn -B -ntp -Dgroups='!integration' test
+
+      # Stage 3 — integration tests (spin up pgvector/pgvector:pg16
+      # via Testcontainers on the runner's native Docker daemon).
+      - name: Integration tests (Testcontainers + pgvector)
+        working-directory: backend
+        run: mvn -B -ntp -Dgroups='integration' test
+
+      - name: Upload surefire reports (on failure only)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ============================================================
+  # Build stage: prove the Docker image actually builds.
+  # No push anywhere — this only verifies the Dockerfile is green.
+  # ============================================================
+  docker:
+    name: Build Docker image (no push)
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build docmind-backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          load: true
+          tags: docmind-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

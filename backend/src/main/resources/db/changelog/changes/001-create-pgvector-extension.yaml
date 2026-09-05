@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-pgvector-extension
+      author: docmind
+      context: test, prod
+      comment: Enable pgvector extension for vector similarity search
+      changes:
+        - sql:
+            sql: CREATE EXTENSION IF NOT EXISTS vector

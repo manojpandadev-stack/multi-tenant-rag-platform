@@ -1,0 +1,46 @@
+databaseChangeLog:
+  - changeSet:
+      id: 009-add-tsvector-to-document-chunks
+      author: docmind
+      context: test, prod
+      comment: Add tsvector generated column and GIN index for BM25 keyword search
+      changes:
+        # Add tsvector column (auto-maintained by trigger for new/updated rows)
+        - sql:
+            sql: >
+              ALTER TABLE document_chunks
+              ADD COLUMN IF NOT EXISTS content_tsv tsvector
+
+        # Backfill existing rows
+        - sql:
+            sql: >
+              UPDATE document_chunks
+              SET content_tsv = to_tsvector('english', content)
+              WHERE content_tsv IS NULL
+
+        # Create trigger to maintain tsvector on INSERT/UPDATE
+        - sql:
+            sql: >
+              CREATE OR REPLACE FUNCTION document_chunks_tsv_trigger() RETURNS trigger AS $$
+              BEGIN
+                NEW.content_tsv := to_tsvector('english', NEW.content);
+                RETURN NEW;
+              END
+              $$ LANGUAGE plpgsql
+
+        - sql:
+            sql: >
+              DROP TRIGGER IF EXISTS tsvector_update ON document_chunks
+
+        - sql:
+            sql: >
+              CREATE TRIGGER tsvector_update
+              BEFORE INSERT OR UPDATE OF content ON document_chunks
+              FOR EACH ROW
+              EXECUTE FUNCTION document_chunks_tsv_trigger()
+
+        # GIN index for fast full-text search
+        - sql:
+            sql: >
+              CREATE INDEX IF NOT EXISTS idx_chunks_content_tsv
+              ON document_chunks USING gin(content_tsv)

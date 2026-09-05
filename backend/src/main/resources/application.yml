@@ -1,0 +1,208 @@
+server:
+  port: 8080
+
+# Document processing trigger mode
+docmind:
+  processing:
+    # kafka  -> publish DocumentUploadedEvent, consumer runs the pipeline (default, event-driven)
+    # async  -> direct @Async bounded-thread-pool invocation (Stage 2 fallback, kept for local dev without Kafka)
+    mode: ${DOCMIND_PROCESSING_MODE:kafka}
+
+spring:
+  application:
+    name: docmind-backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:${POSTGRES_PORT:5433}/docmind
+    username: docmind
+    password: docmind
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: public
+
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # Ensure the publish is actually durable before the upload endpoint returns
+      acks: all
+    consumer:
+      group-id: docmind-processing-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.docmind.event
+        spring.json.value.default.type: com.docmind.event.DocumentUploadedEvent
+    template:
+      default-topic: document-uploaded
+      # Micrometer observation on every send -> injects W3C traceparent into record headers
+      observation-enabled: true
+    listener:
+      # Micrometer observation on every consume -> extracts traceparent and continues the trace
+      observation-enabled: true
+      missing-topics-fatal: false
+
+# JWT Configuration
+jwt:
+  secret: ${JWT_SECRET:change-me-in-production-use-at-least-256-bits-for-HS256}
+  expiration-ms: 86400000  # 24 hours
+  refresh-expiration-ms: 604800000  # 7 days
+
+# Tenant isolation
+tenant:
+  header: X-Org-Id
+
+# LLM Configuration
+llm:
+  groq:
+    api-key: ${GROQ_API_KEY:}
+    model: llama-3.1-70b-versatile
+  openai:
+    api-key: ${OPENAI_API_KEY:}
+    model: gpt-4o-mini
+  primary-provider: groq
+  fallback-provider: openai
+
+# Embedding configuration
+embedding:
+  dimension: 1536  # text-embedding-3-small produces 1536-dim vectors
+  batch-size: 20
+  api-key: ${OPENAI_API_KEY:}
+  model: text-embedding-3-small
+
+# Cohere Rerank
+cohere:
+  api-key: ${COHERE_API_KEY:}
+  model: rerank-english-v3.0
+  rerank-top-n: 5
+
+# Resilience4j
+resilience4j:
+  retry:
+    instances:
+      embedding:
+        max-attempts: 3
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+      cohere-rerank:
+        max-attempts: 2
+        wait-duration: 500ms
+        enable-exponential-backoff: true
+        retry-exceptions:
+          - java.io.IOException
+  circuitbreaker:
+    instances:
+      cohere-rerank:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+
+# Chunking defaults
+chunking:
+  default-strategy: recursive
+  default-chunk-size: 512
+  default-chunk-overlap: 50
+
+# Semantic cache configuration
+cache:
+  similarity-threshold: 0.95
+  ttl-hours: 24
+  max-entries-per-org: 500
+  enabled: true
+
+# Provider pricing (cents per unit, updated periodically)
+pricing:
+  embedding:
+    cost-per-million-tokens: 2.0    # OpenAI text-embedding-3-small: $0.02/1M
+  llm:
+    input-cost-per-million-tokens: 15.0   # Groq llama-3.1-70b: $0.59/1M in
+    output-cost-per-million-tokens: 60.0  # Groq llama-3.1-70b: $0.79/1M out
+  rerank:
+    cost-per-1000-queries: 100.0    # Cohere rerank-english-v3.0: $1.00/1K
+
+# Retrieval strategy defaults
+retrieval:
+  default-strategy: vector-only  # vector-only | hybrid | hybrid+rerank
+  top-k: 10
+  vector-weight: 0.7
+  bm25-weight: 0.3
+
+# Observability
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    tags:
+      # Label used by the Grafana dashboard's http_server_requests panels
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5,0.75,0.95,0.99
+
+  tracing:
+    sampling:
+      probability: 1.0
+
+  otlp:
+    tracing:
+      # Spring Boot 3.3 OTLP HTTP exporter (gRPC endpoint not supported by auto-config).
+      # Compose overrides this via MANAGEMENT_OTLP_TRACING_ENDPOINT for the in-container value.
+      endpoint: ${OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+
+# Swagger
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+# Logging
+# Dev profile: human-readable with trace ID + org_id in MDC
+# Production profile: JSON format for log aggregation (Elasticsearch, Datadog, etc.)
+logging:
+  level:
+    com.docmind: DEBUG
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} [traceId=%X{traceId},spanId=%X{spanId},orgId=%X{org_id}] - %msg%n"
+
+---
+spring.config.activate.on-profile: production
+logging:
+  level:
+    com.docmind: INFO
+    org.hibernate.SQL: WARN
+  pattern:
+    console: ""
+  file:
+    name: logs/docmind-backend.log

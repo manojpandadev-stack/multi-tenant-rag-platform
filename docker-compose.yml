@@ -1,0 +1,134 @@
+name: docmind
+
+services:
+  # PostgreSQL with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: docmind-postgres
+    ports:
+      - "5433:5432"   # host 5433 -> container 5432 (host 5432 is used by the intellimove Postgres)
+    environment:
+      POSTGRES_DB: docmind
+      POSTGRES_USER: docmind
+      POSTGRES_PASSWORD: docmind
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Kafka — KRaft mode (no ZooKeeper). Internal Docker network only.
+  # No host port is published: the backend reaches it at kafka:9092, and this
+  # avoids colliding with the intellimove project's Kafka bound to host port 9092.
+  # (If you ever need host access, add:  ports: ["9094:9092"] — maps to 9094 to
+  #  dodge intellimove's 9092.)
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: docmind-kafka
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/scripts/kafka/healthcheck.sh || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # Backend (built from Dockerfile)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: docmind-backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/docmind
+      SPRING_DATASOURCE_USERNAME: docmind
+      SPRING_DATASOURCE_PASSWORD: docmind
+      JWT_SECRET: ${JWT_SECRET:-super-secret-change-in-production-must-be-256-bits}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DOCMIND_PROCESSING_MODE: kafka
+      # Spring Boot 3.3 OTLP HTTP tracing exporter -> Jaeger HTTP receiver (4318)
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Jaeger — all-in-one for local dev (traces + metrics UI)
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: docmind-jaeger
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+      - "4318:4318"     # OTLP HTTP receiver
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:16686/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Prometheus — scrapes /actuator/prometheus from backend
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: docmind-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Grafana — pre-provisioned with Prometheus datasource + dashboard
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: docmind-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

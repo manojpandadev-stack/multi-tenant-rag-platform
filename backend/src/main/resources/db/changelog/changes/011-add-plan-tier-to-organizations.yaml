@@ -1,0 +1,32 @@
+databaseChangeLog:
+  - changeSet:
+      id: 011-add-plan-tier-to-organizations
+      author: docmind
+      changes:
+        - addColumn:
+            tableName: organizations
+            columns:
+              - column:
+                  name: plan_tier
+                  type: varchar(20)
+                  defaultValueComputed: "'FREE'"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: monthly_query_limit
+                  type: integer
+                  defaultValueComputed: "'1000'"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: monthly_doc_limit
+                  type: integer
+                  defaultValueComputed: "'50'"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: monthly_storage_limit_bytes
+                  type: bigint
+                  defaultValueComputed: "'524288000'"
+                  constraints:
+                    nullable: false

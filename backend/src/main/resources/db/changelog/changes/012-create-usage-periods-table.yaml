@@ -1,0 +1,121 @@
+databaseChangeLog:
+  - changeSet:
+      id: 012-create-usage-periods-table
+      author: docmind
+      changes:
+        - createTable:
+            tableName: usage_periods
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: org_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: billing_period
+                  type: varchar(7)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: documents_uploaded
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: storage_bytes
+                  type: bigint
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: queries_total
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: queries_vector_only
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: queries_hybrid
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: queries_hybrid_rerank
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: embedding_tokens
+                  type: bigint
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: llm_input_tokens
+                  type: bigint
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: llm_output_tokens
+                  type: bigint
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cache_hits
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cache_misses
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: rerank_calls
+                  type: integer
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: estimated_cost_cents
+                  type: bigint
+                  defaultValue: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamp
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamp
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: usage_periods
+            columnNames: org_id, billing_period
+            constraintName: uk_usage_periods_org_period
+        - createIndex:
+            tableName: usage_periods
+            indexName: idx_usage_periods_org_id
+            columns:
+              - column:
+                  name: org_id

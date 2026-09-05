@@ -1,0 +1,16 @@
+DocMind Pro Test Document
+
+This is a test document for the DocMind Pro ingestion pipeline.
+It contains multiple paragraphs to verify chunking behavior.
+
+First paragraph: The quick brown fox jumps over the lazy dog. This sentence contains every letter of the English alphabet, making it useful for testing text extraction and chunking.
+
+Second paragraph: Retrieval-Augmented Generation (RAG) combines information retrieval with text generation. By first retrieving relevant documents and then generating answers based on those documents, RAG produces more accurate and grounded responses than pure language models.
+
+Third paragraph: Multi-tenant isolation ensures that Organization A can never access Organization B's documents or embeddings. This is enforced at three levels: the request filter, the service layer, and the database query layer.
+
+Fourth paragraph: Vector embeddings represent text as high-dimensional numerical vectors. Similar texts have similar vectors, enabling cosine similarity search for semantic retrieval.
+
+Fifth paragraph: The chunking strategy determines how documents are split before embedding. Recursive character splitting tries paragraph breaks first, then sentences, then words, producing semantically coherent chunks.
+
+Sixth paragraph: OpenAI's text-embedding-3-small model produces 1536-dimensional vectors at a cost of $0.02 per million input tokens, making it cost-effective for production RAG systems.

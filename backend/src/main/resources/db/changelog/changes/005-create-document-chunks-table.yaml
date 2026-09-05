@@ -1,0 +1,58 @@
+databaseChangeLog:
+  - changeSet:
+      id: 005-create-document-chunks-table
+      author: docmind
+      context: test, prod
+      comment: Document chunks table with pgvector embedding column
+      changes:
+        - createTable:
+            tableName: document_chunks
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: org_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_chunks_org
+                    references: organizations(id)
+              - column:
+                  name: document_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_chunks_document
+                    references: documents(id)
+              - column:
+                  name: content
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: embedding
+                  type: "vector(${embedding.dimension})"
+              - column:
+                  name: chunk_index
+                  type: integer
+                  constraints:
+                    nullable: false
+              - column:
+                  name: token_count
+                  type: integer
+              - column:
+                  name: embedding_status
+                  type: varchar(20)
+                  defaultValue: PENDING
+              - column:
+                  name: metadata_json
+                  type: jsonb
+              - column:
+                  name: created_at
+                  type: timestamp
+                  defaultValueComputed: now()

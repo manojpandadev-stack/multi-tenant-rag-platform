@@ -1,0 +1,72 @@
+databaseChangeLog:
+  - changeSet:
+      id: 007-create-standard-indexes
+      author: docmind
+      context: test, prod
+      comment: Standard B-tree and GIN indexes for FK columns, email, status, FTS
+      changes:
+        # Users indexes
+        - createIndex:
+            tableName: users
+            indexName: idx_users_org_id
+            columns:
+              - column:
+                  name: org_id
+
+        - createIndex:
+            tableName: users
+            indexName: idx_users_email
+            columns:
+              - column:
+                  name: email
+
+        # Documents indexes
+        - createIndex:
+            tableName: documents
+            indexName: idx_documents_org_id
+            columns:
+              - column:
+                  name: org_id
+
+        - createIndex:
+            tableName: documents
+            indexName: idx_documents_status
+            columns:
+              - column:
+                  name: status
+
+        # Document chunks indexes
+        - createIndex:
+            tableName: document_chunks
+            indexName: idx_chunks_org_id
+            columns:
+              - column:
+                  name: org_id
+
+        - createIndex:
+            tableName: document_chunks
+            indexName: idx_chunks_document_id
+            columns:
+              - column:
+                  name: document_id
+
+        - createIndex:
+            tableName: document_chunks
+            indexName: idx_chunks_embedding_status
+            columns:
+              - column:
+                  name: embedding_status
+
+        # Full-text search index for BM25 keyword search
+        - sql:
+            sql: CREATE INDEX idx_chunks_content_fts ON document_chunks USING gin(to_tsvector('english', content))
+
+        # Usage records index
+        - createIndex:
+            tableName: usage_records
+            indexName: idx_usage_org_created
+            columns:
+              - column:
+                  name: org_id
+              - column:
+                  name: created_at

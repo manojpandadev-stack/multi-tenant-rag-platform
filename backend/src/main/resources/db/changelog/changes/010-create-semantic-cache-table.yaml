@@ -1,0 +1,65 @@
+databaseChangeLog:
+  - changeSet:
+      id: 010-create-semantic-cache-table
+      author: docmind
+      changes:
+        - createTable:
+            tableName: semantic_cache
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: org_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: scope_hash
+                  type: varchar(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: query_text
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: query_embedding
+                  type: "vector(1536)"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: answer_text
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source_chunk_ids
+                  type: jsonb
+              - column:
+                  name: source_doc_ids
+                  type: jsonb
+              - column:
+                  name: model_used
+                  type: varchar(100)
+              - column:
+                  name: token_count
+                  type: integer
+                  defaultValueNumeric: 0
+              - column:
+                  name: expires_at
+                  type: "timestamptz"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: "timestamptz"
+                  defaultValueComputed: now()
+        - sql:
+            sql: CREATE INDEX idx_cache_org_scope ON semantic_cache(org_id, scope_hash);
+        - sql:
+            sql: CREATE INDEX idx_cache_expires ON semantic_cache(expires_at);

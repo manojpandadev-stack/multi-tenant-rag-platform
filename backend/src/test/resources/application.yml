@@ -1,0 +1,60 @@
+# Minimal test config - actual DB connection is injected by @DynamicPropertySource
+# in each Testcontainers-based test class. This file just prevents Spring from
+# failing to start if a test doesn't override all properties.
+#
+# NOTE: this file SHADOWS src/main/resources/application.yml on the test classpath
+# (Spring Boot loads exactly one application.yml — test-classes first). Anything
+# the app needs from the main yml must be mirrored here: JWT config, embedding
+# dimension, spring.kafka serializers, docmind.processing.mode.
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  liquibase:
+    enabled: false
+  sql:
+    init:
+      mode: never
+
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+    consumer:
+      group-id: docmind-processing-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.docmind.event
+        spring.json.value.default.type: com.docmind.event.DocumentUploadedEvent
+    template:
+      default-topic: document-uploaded
+      # Micrometer observation on send -> injects W3C traceparent into record headers
+      observation-enabled: true
+    listener:
+      # Micrometer observation on consume -> extracts traceparent, continues the trace
+      observation-enabled: true
+      missing-topics-fatal: false
+
+# Test default: the @Async path (what DocumentIngestionTest, TenantIsolationTest,
+# SemanticCache*, Usage* and the eval harness have always exercised — no broker needed).
+# KafkaDocumentIngestionTest overrides this to "kafka" via @TestPropertySource and
+# supplies a real broker through Testcontainers.
+docmind:
+  processing:
+    mode: async
+
+jwt:
+  secret: test-secret-must-be-at-least-256-bits-for-hs256-algorithm
+  expiration-ms: 86400000
+  refresh-expiration-ms: 604800000
+
+embedding:
+  dimension: 1536
+
+logging:
+  level:
+    com.docmind: DEBUG
+    org.hibernate.SQL: WARN

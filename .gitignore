@@ -1,0 +1,46 @@
+# Java
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+
+# Maven
+.mvn/
+mvnw
+mvnw.cmd
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Spring Boot
+*.pid
+storage/
+
+# Environment / Secrets
+.env
+.env.local
+.env.*.local
+
+# Docker
+docker-compose.override.yml
+
+# Node.js
+node_modules/
+frontend/build/
+frontend/dist/
+frontend/.env*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test results
+surefire-reports/
+failsafe-reports/

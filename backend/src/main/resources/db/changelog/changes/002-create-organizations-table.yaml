@@ -1,0 +1,52 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-create-organizations-table
+      author: docmind
+      context: test, prod
+      comment: Organizations table — the tenant root entity
+      changes:
+        - createTable:
+            tableName: organizations
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: slug
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+              - column:
+                  name: chunking_strategy
+                  type: varchar(50)
+                  defaultValue: recursive
+              - column:
+                  name: chunk_size
+                  type: integer
+                  defaultValue: 512
+              - column:
+                  name: chunk_overlap
+                  type: integer
+                  defaultValue: 50
+              - column:
+                  name: retrieval_strategy
+                  type: varchar(50)
+                  defaultValue: vector-only
+              - column:
+                  name: created_at
+                  type: timestamp
+                  defaultValueComputed: now()
+              - column:
+                  name: updated_at
+                  type: timestamp
+                  defaultValueComputed: now()

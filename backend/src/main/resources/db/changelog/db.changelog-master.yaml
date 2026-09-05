@@ -1,0 +1,25 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/changes/001-create-pgvector-extension.yaml
+  - include:
+      file: db/changelog/changes/002-create-organizations-table.yaml
+  - include:
+      file: db/changelog/changes/003-create-users-table.yaml
+  - include:
+      file: db/changelog/changes/004-create-documents-table.yaml
+  - include:
+      file: db/changelog/changes/005-create-document-chunks-table.yaml
+  - include:
+      file: db/changelog/changes/006-create-usage-records-table.yaml
+  - include:
+      file: db/changelog/changes/007-create-standard-indexes.yaml
+  - include:
+      file: db/changelog/changes/008-create-hnsw-vector-index.yaml
+  - include:
+      file: db/changelog/changes/009-add-tsvector-to-document-chunks.yaml
+  - include:
+      file: db/changelog/changes/010-create-semantic-cache-table.yaml
+  - include:
+      file: db/changelog/changes/011-add-plan-tier-to-organizations.yaml
+  - include:
+      file: db/changelog/changes/012-create-usage-periods-table.yaml

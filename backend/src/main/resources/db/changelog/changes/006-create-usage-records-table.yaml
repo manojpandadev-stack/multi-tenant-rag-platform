@@ -1,0 +1,45 @@
+databaseChangeLog:
+  - changeSet:
+      id: 006-create-usage-records-table
+      author: docmind
+      context: test, prod
+      comment: Usage tracking for billing metering
+      changes:
+        - createTable:
+            tableName: usage_records
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: org_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_usage_org
+                    references: organizations(id)
+              - column:
+                  name: event_type
+                  type: varchar(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tokens_consumed
+                  type: integer
+                  defaultValue: 0
+              - column:
+                  name: is_cache_hit
+                  type: boolean
+                  defaultValue: false
+              - column:
+                  name: estimated_cost_cents
+                  type: integer
+                  defaultValue: 0
+              - column:
+                  name: created_at
+                  type: timestamp
+                  defaultValueComputed: now()

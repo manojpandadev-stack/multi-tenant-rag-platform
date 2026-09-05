@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: 008-create-hnsw-vector-index
+      author: docmind
+      context: test, prod
+      comment: >
+        HNSW index for scoped ANN search on (org_id, embedding).
+        Isolated in its own changeset because:
+        1. HNSW index creation can be slow on large tables
+        2. If it fails (e.g. pgvector version too old), the rest of the schema is unaffected
+        3. Can be re-run independently without touching other changesets
+        4. May need tuning (lists, ef_construction) as data volume grows
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_chunks_org_embedding ON document_chunks USING hnsw (embedding vector_cosine_ops)
