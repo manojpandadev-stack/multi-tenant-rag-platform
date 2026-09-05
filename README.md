@@ -246,7 +246,7 @@ Honesty standard (same as the rest of the project): **Measured** = a number prod
 
 - The unit/integration split is enforced with JUnit 5 `@Tag("integration")` on the seven Testcontainers-backed test classes. Plain `mvn test` (no flags) still runs everything — local behavior is unchanged.
 - Maven repo is cached between runs (`actions/setup-java` cache) and the Docker layers use `type=gha` cache, so rebuilds are fast.
-- **Status:** the workflow is meant to be green on first push. The compile and unit stages were validated locally (JDK 21.0.9 + Maven 3.9.16); the integration stage requires a Docker daemon, which GitHub-hosted `ubuntu-latest` runners provide natively. Badge (top of README) activates once `OWNER/REPO` in the badge URL is replaced with the real repo.
+- **Status:** all four stages verified locally on 2026-09-05 (JDK 21 + Maven 3.9.16 + Docker 29.5): full suite **86 tests, 0 failures, 0 errors** (13 classes, including the 4 Kafka event-driven ingestion tests on a real Testcontainers broker), and the Docker image builds cleanly. The badge activates once `OWNER/REPO` is replaced with the real repo slug.
 
 ### 2. Kafka — Event-Driven Document Processing
 
