@@ -21,7 +21,11 @@ mvnw.cmd
 
 # Spring Boot
 *.pid
-storage/
+# Stage 2 upload dir (repo root + backend/ working dir when Maven runs from
+# backend/). Anchored so it does NOT swallow Java packages named "storage"
+# (e.g. com/docmind/storage/).
+/storage/
+/backend/storage/
 
 # Environment / Secrets
 .env

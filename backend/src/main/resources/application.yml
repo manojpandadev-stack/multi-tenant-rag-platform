@@ -8,6 +8,27 @@ docmind:
     # async  -> direct @Async bounded-thread-pool invocation (Stage 2 fallback, kept for local dev without Kafka)
     mode: ${DOCMIND_PROCESSING_MODE:kafka}
 
+  # Document file storage (Stage 8 Section 3)
+  storage:
+    # s3    -> S3-compatible object storage: real AWS S3 in prod, LocalStack locally/CI
+    #          (the ONLY difference is docmind.storage.s3.endpoint — config, not code)
+    # local -> zero-infra fallback: Stage 2 local disk under docmind.storage.local.base-dir
+    mode: ${DOCMIND_STORAGE_MODE:s3}
+    s3:
+      bucket: ${DOCMIND_STORAGE_S3_BUCKET:docmind-documents}
+      region: ${AWS_REGION:us-east-1}
+      # Empty = real AWS (regional endpoint + default AWS credentials chain: env / IAM role / ~/.aws).
+      # Set (e.g. http://localhost:4566) for LocalStack — path-style + static test creds are applied automatically.
+      endpoint: ${DOCMIND_STORAGE_S3_ENDPOINT:}
+      # Static credentials for LocalStack ("test"/"test"). Leave empty in prod — never hardcode AWS keys here.
+      access-key-id: ${AWS_ACCESS_KEY_ID:}
+      secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+      # Create the bucket at startup if missing. Dev/CI convenience only — keep false in production
+      # (the bucket should pre-exist there; the app then needs no s3:CreateBucket permission).
+      auto-create-bucket: ${DOCMIND_STORAGE_S3_AUTO_CREATE_BUCKET:false}
+    local:
+      base-dir: ${DOCMIND_STORAGE_LOCAL_BASE_DIR:storage}
+
 spring:
   application:
     name: docmind-backend

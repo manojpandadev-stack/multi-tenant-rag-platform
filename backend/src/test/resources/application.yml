@@ -45,6 +45,12 @@ spring:
 docmind:
   processing:
     mode: async
+  # Storage: tests default to the zero-infra local-disk implementation so the
+  # 86 pre-existing tests need no S3 infra. DocumentStorageS3IntegrationTest
+  # overrides this to "s3" and supplies a real LocalStack container through
+  # the official Testcontainers module (same lesson as Kafka in Section 2).
+  storage:
+    mode: local
 
 jwt:
   secret: test-secret-must-be-at-least-256-bits-for-hs256-algorithm

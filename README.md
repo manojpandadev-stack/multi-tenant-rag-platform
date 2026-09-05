@@ -41,6 +41,7 @@ graph TB
 
     subgraph "Data Layer"
         PG[(PostgreSQL 16 + pgvector)]
+        S3[(S3 Object Storage — LocalStack dev / real AWS prod<br/>tenant prefix: org/{orgId}/...)]
     end
 
     subgraph "Observability"
@@ -54,7 +55,9 @@ graph TB
     end
 
     GW --> AUTH --> TENANT
+    TENANT --> UPLOAD -->|store file bytes<br/>key = org/{orgId}/{file}| S3
     TENANT --> UPLOAD -->|publish DocumentUploadedEvent<br/>after commit| KAFKA --> PIPE --> EXTRACT --> CHUNK --> EMBED --> PG
+    EXTRACT -.->|retrieve bytes<br/>from storage| S3
     TENANT --> CACHE
     CACHE -->|miss| VECTOR & BM25 --> RRF --> RERANK --> LLM
     CACHE -->|hit| LLM
@@ -115,13 +118,16 @@ Every metric is tagged: ✅ Measured (from test output), ⚠️ Extrapolated (ca
 
 | Stage | Tests | Status |
 |-------|-------|--------|
-| Stage 1: Tenant isolation | 10 | ✅ All pass |
-| Stage 2: Ingestion pipeline | 13 (8 unit + 5 integration) | ✅ All pass |
-| Stage 3: Hybrid search + RRF | 9 | ✅ All pass |
+| Stage 1: Tenant isolation | 10 integration | ✅ All pass |
+| Stage 2: Ingestion pipeline | 9 unit (chunking) + 5 integration (async) | ✅ All pass |
+| Stage 8 §2: Kafka ingestion | 4 integration | ✅ All pass |
+| Stage 3: Hybrid search + RRF | 9 unit | ✅ All pass |
 | Stage 4: Semantic cache | 18 (10 unit + 6 integration + 2 load) | ✅ All pass |
-| Stage 5: Usage metering | 18 (12 unit + 5 integration + 1 concurrency) | ✅ All pass |
+| Stage 5: Usage metering | 17 (12 unit + 5 integration incl. concurrency) | ✅ All pass |
 | Stage 6: Observability | 11 (8 tracing + 3 async propagation) | ✅ All pass |
-| **Total** | **82** | **✅ 100%** |
+| Real-embedding eval harness | 3 integration — **skipped** without `OPENAI_API_KEY` | ✅ Degrades deterministically |
+| Stage 8 §3: S3 storage (LocalStack) | 3 integration | ✅ All pass |
+| **Total** | **89 (51 unit + 38 integration)** | **✅ 100%** |
 
 ---
 
@@ -240,12 +246,12 @@ Honesty standard (same as the rest of the project): **Measured** = a number prod
 |-------|---------|----------------|
 | 1. Compile | `mvn -DskipTests test-compile` | Main + test sources compile (fail fast) |
 | 2. Unit tests | `mvn -Dgroups='!integration' test` | 7 pure unit test classes — no Docker needed |
-| 3. Integration tests | `mvn -Dgroups='integration' test` | 7 Testcontainers-backed classes spin up `pgvector/pgvector:pg16` on the runner's native Docker daemon |
+| 3. Integration tests | `mvn -Dgroups='integration' test` | 8 Testcontainers-backed classes spin up `pgvector/pgvector:pg16`, a real Kafka broker, and a LocalStack S3 container on the runner's native Docker daemon |
 | 4. Docker build | `docker/build-push-action` (push: false) | The backend Dockerfile builds cleanly (nothing is pushed anywhere) |
 
-- The unit/integration split is enforced with JUnit 5 `@Tag("integration")` on the seven Testcontainers-backed test classes. Plain `mvn test` (no flags) still runs everything — local behavior is unchanged.
+- The unit/integration split is enforced with JUnit 5 `@Tag("integration")` on the eight Testcontainers-backed test classes. Plain `mvn test` (no flags) still runs everything — local behavior is unchanged.
 - Maven repo is cached between runs (`actions/setup-java` cache) and the Docker layers use `type=gha` cache, so rebuilds are fast.
-- **Status:** all four stages verified locally on 2026-09-05 (JDK 21 + Maven 3.9.16 + Docker 29.5): full suite **86 tests, 0 failures, 0 errors** (13 classes, including the 4 Kafka event-driven ingestion tests on a real Testcontainers broker), and the Docker image builds cleanly. The badge activates once `OWNER/REPO` is replaced with the real repo slug.
+- **Status (verified on GitHub Actions, not just locally):** run #2 — first run failed and was *diagnosed from the forked-JVM thread dump*: all tests passed but Hibernate's `create-drop` schema-drop at JVM shutdown borrowed a Hikari connection after the test containers were already gone, blocking 30s (Hikari `connectionTimeout`) and tripping Surefire's 30s forked-JVM exit timeout → exit 1. Fixed by using `ddl-auto=create` in integration tests (containers are ephemeral — nothing to drop). Runs **#2 and #3 green**: full suite **89 tests, 0 failures, 0 errors** (14 classes), Docker image builds cleanly.
 
 ### 2. Kafka — Event-Driven Document Processing
 
@@ -292,7 +298,46 @@ The `@Async` path is deliberately **not deleted** — `AsyncConfig` (core=2, max
 3. `kafkaProcessingFailureMarksDocumentFailed` — document with a non-existent storage path → consumer runs pipeline → `FAILED` with the extraction error (never stuck `PENDING`/`PROCESSING`)
 4. `tracePropagatesAcrossKafkaBoundary` — single trace ID spans the Kafka publish/consume boundary (see above)
 
-> **Status (honesty standard):** *Written and compile-verified* (`mvn test-compile` → BUILD SUCCESS) but **not yet executed locally** — the integration stage requires a Docker daemon, and per the Section 2 protocol these run in CI (or locally with Docker started) before Section 3 begins. Pass counts will be reported against real runs, not assumed.
+> **Status (honesty standard):** *Executed against real runs* — 4/4 pass locally (Docker 29.5) and on GitHub Actions (ubuntu-latest, native Docker daemon), CI runs #2 and #3 green.
+
+### 3. S3 Storage (via LocalStack)
+
+Stage 2 wrote uploads to local disk (`storage/{org_id}/`) — fine for a laptop, not a cloud-native story. Stage 8 §3 replaces it with S3-compatible object storage behind an interface, using **LocalStack** for local dev and CI (free, no AWS account) and **real AWS S3** in production — same code, config-only switch.
+
+**Interface design.** One interface, two implementations, selected by `docmind.storage.mode` — the storage counterpart of the `docmind.processing.mode` (kafka/async) toggle from §2:
+
+```java
+public interface DocumentStorageService {
+    String store(UUID orgId, String storedFilename, byte[] content, String contentType); // returns opaque key
+    byte[] retrieve(String storageKey);   // used by the pipeline for extraction / retry re-processing
+    void delete(String storageKey);       // idempotent (mirrors the old Files.deleteIfExists)
+    default String buildKey(UUID orgId, String storedFilename) { return "org/" + orgId + "/" + storedFilename; }
+}
+```
+
+- `S3DocumentStorageService` — AWS SDK v2 sync `S3Client` (with `UrlConnectionHttpClient` pinned explicitly, so the SDK's HTTP-client SPI auto-discovery can't pick an incompatible impl from elsewhere on the classpath).
+- `LocalDiskDocumentStorageService` — **kept as the fallback** (decision: yes, keep it). Zero-infra local dev and the pre-existing 86 tests run without any S3; the pattern matches `processing.mode=async`. Tests default to `local`; production and docker-compose default to `s3`.
+
+**LocalStack vs real S3 — config only.** Nothing LocalStack-specific exists in production code paths:
+
+| Setting | LocalStack (dev / CI) | Real AWS (prod) |
+|---------|----------------------|-----------------|
+| `docmind.storage.s3.endpoint` | `http://localstack:4566` (compose) / Testcontainers-injected (CI) | **empty** → regional endpoint |
+| addressing | path-style (auto when endpoint is set) | virtual-hosted (default) |
+| credentials | static `test`/`test` (auto when endpoint is set) | default AWS chain: env / IAM role / `~/.aws` |
+| `auto-create-bucket` | `true` (dev convenience) | `false` — bucket pre-exists; app needs no `s3:CreateBucket` |
+
+Bucket, region, and endpoint are all configurable (`docmind.storage.s3.*`, env-overridable — see `.env.example` and the `localstack` service in `docker-compose.yml`, which the backend waits on via a healthcheck).
+
+**Tenant isolation in object storage.** S3 has no Postgres-style `org_id` row filtering, so isolation is enforced at the application layer (documented in the interface javadoc, asserted in tests): every key is `org/{orgId}/{file}` with the org id taken from the server-side tenant context (never client input), no API surface accepts or returns storage keys (`DocumentResponse` has no path field), and `documents.storage_path` is only ever reached through `findByIdAndOrgId`-scoped lookups.
+
+**Tests** (`DocumentStorageS3IntegrationTest`, `@Tag("integration")`, official Testcontainers **LocalStack module** — not a manually-started container, same lesson as Kafka in §2 — plus `pgvector/pgvector:pg16`; assertions verify real bucket state through the raw S3 client, not just "no exception"):
+
+1. `uploadStoresObjectUnderTenantPrefixAndPipelineReadsItBack` — upload → `HeadObject` confirms the object physically exists with byte-identical size **and content**, under `org/{orgId}/...` → pipeline reaches `READY` with chunks, which is only possible if it retrieved the bytes back out of S3 (re-processing reads from storage)
+2. `deleteDocumentRemovesObjectFromS3` — delete → `HeadObject` returns **404 NoSuchKey** and the DB row is gone
+3. `tenantIsolationInObjectStorage` — org A's and org B's objects land strictly under their own prefixes; the application layer rejects org B reading **and** deleting org A's document; org A's object is untouched by the denied attempts
+
+> **Status (honesty standard):** *Executed against real runs* — 3/3 pass locally (LocalStack 4.13.1 container) and the full 89-test suite is green in CI runs #2/#3 on ubuntu-latest. Two issues found and fixed during bring-up, both documented in test comments: (1) `localstack/localstack:latest` (2026.x) now demands a `LOCALSTACK_AUTH_TOKEN` even for community services — pinned to 4.13.1, the last token-free community line, so CI needs no account/secret; (2) a `@DynamicPropertySource` supplier is re-invoked on every property resolution — an inline bucket-name UUID gave the service and the test two different buckets (the exact 404 you'd see), fixed by computing the name once into a static field.
 
 ---
 
@@ -303,7 +348,7 @@ This project is designed for demonstration and learning. Here's what would chang
 | MVP Choice | Production Replacement | Why |
 |------------|----------------------|-----|
 | ~~`@Async` with bounded thread pool~~ | **Kafka + consumer service — ✅ DONE (Stage 8, Section 2)** | Replaced as the default trigger: `document-uploaded` topic + `@KafkaListener` consumer + retry-then-DLQ. See "Cloud-Native Infrastructure §2" |
-| Local disk file storage | **S3/GCS** | Durability, CDN, lifecycle policies, no single-server bottleneck |
+| ~~Local disk file storage~~ | **S3 via `DocumentStorageService` — ✅ DONE (Stage 8, Section 3)** | Durability, CDN, lifecycle policies, no single-server bottleneck. LocalStack locally/CI, real AWS S3 by clearing one config value. See "Cloud-Native Infrastructure §3" |
 | Postgres cosine scan for cache | **RediSearch or Pinecone** | O(log n) vector lookups when cache grows to millions of entries |
 | Raw JDBC for usage period creation | **Kafka + consumer** | Decoupled usage tracking from request path, event sourcing |
 | JWT in request header | **OAuth2 + session management** | Token rotation, revocation, SSO integration |

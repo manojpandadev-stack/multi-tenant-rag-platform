@@ -45,6 +45,28 @@ services:
       retries: 12
       start_period: 30s
 
+  # LocalStack — S3-compatible object storage for local dev (Stage 8 Section 3).
+  # Community image with the S3 service enabled. In production this is replaced
+  # by real AWS S3 by simply clearing docmind.storage.s3.endpoint — no code change.
+  localstack:
+    # Pinned to 4.13.1 — the last community release line that starts without a
+    # LocalStack auth token (2026.x images demand LOCALSTACK_AUTH_TOKEN even for
+    # community services like S3).
+    image: localstack/localstack:4.13.1
+    container_name: docmind-localstack
+    ports:
+      - "4566:4566"   # LocalStack edge endpoint (host access for aws CLI debugging)
+    environment:
+      SERVICES: s3
+      PERSISTENCE: "0"            # ephemeral like every other dev container here
+      AWS_DEFAULT_REGION: us-east-1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:4566/_localstack/health | grep -q '\"s3\": \"available\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
   # Backend (built from Dockerfile)
   backend:
     build:
@@ -58,6 +80,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/docmind
       SPRING_DATASOURCE_USERNAME: docmind
@@ -68,6 +92,14 @@ services:
       COHERE_API_KEY: ${COHERE_API_KEY:-}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       DOCMIND_PROCESSING_MODE: kafka
+      # Object storage: S3 mode against LocalStack (bucket auto-created at startup)
+      DOCMIND_STORAGE_MODE: s3
+      DOCMIND_STORAGE_S3_ENDPOINT: http://localstack:4566
+      DOCMIND_STORAGE_S3_BUCKET: docmind-documents
+      DOCMIND_STORAGE_S3_AUTO_CREATE_BUCKET: "true"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
       # Spring Boot 3.3 OTLP HTTP tracing exporter -> Jaeger HTTP receiver (4318)
       MANAGEMENT_OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
     healthcheck:

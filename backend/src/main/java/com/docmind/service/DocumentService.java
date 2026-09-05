@@ -10,6 +10,7 @@ import com.docmind.model.Organization;
 import com.docmind.repository.DocumentChunkRepository;
 import com.docmind.repository.DocumentRepository;
 import com.docmind.repository.OrganizationRepository;
+import com.docmind.storage.DocumentStorageService;
 import com.docmind.tenant.TenantAwareService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,9 +23,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
@@ -48,6 +46,7 @@ public class DocumentService {
     private final SemanticCacheService cacheService;
     private final UsageRecordingService usageRecording;
     private final DocumentUploadedEventPublisher eventPublisher;
+    private final DocumentStorageService storageService;
     private final String processingMode;
 
     public DocumentService(
@@ -59,6 +58,7 @@ public class DocumentService {
             SemanticCacheService cacheService,
             UsageRecordingService usageRecording,
             DocumentUploadedEventPublisher eventPublisher,
+            DocumentStorageService storageService,
             @Value("${docmind.processing.mode:kafka}") String processingMode) {
         this.documentRepository = documentRepository;
         this.chunkRepository = chunkRepository;
@@ -68,11 +68,13 @@ public class DocumentService {
         this.cacheService = cacheService;
         this.usageRecording = usageRecording;
         this.eventPublisher = eventPublisher;
+        this.storageService = storageService;
         this.processingMode = processingMode;
     }
 
     /**
-     * Upload a document: validate, store on disk, create DB record, trigger async processing.
+     * Upload a document: validate, store in object storage (S3 / LocalStack,
+     * or local disk in local-fallback mode), create DB record, trigger async processing.
      */
     @Transactional
     public UploadResponse uploadDocument(MultipartFile file, UUID userId) throws IOException {
@@ -97,12 +99,13 @@ public class DocumentService {
                 "Unsupported file type: " + extension + ". Allowed: PDF, DOCX, TXT");
         }
 
-        // Store file on disk
-        Path storageDir = Paths.get("storage", orgId.toString());
-        Files.createDirectories(storageDir);
+        // Store file in object storage (S3 in prod/CI, local disk fallback —
+        // selected by docmind.storage.mode). The key embeds the org id so every
+        // object lives under its tenant's prefix; the key is opaque from here on
+        // and persists in documents.storage_path.
         String storedFilename = UUID.randomUUID() + "." + extension.toLowerCase();
-        Path filePath = storageDir.resolve(storedFilename);
-        file.transferTo(filePath.toFile());
+        String storageKey = storageService.store(
+                orgId, storedFilename, file.getBytes(), file.getContentType());
 
         // Create DB record
         Organization org = orgRepository.findById(orgId).orElseThrow();
@@ -112,7 +115,7 @@ public class DocumentService {
             .originalFilename(originalFilename)
             .fileType(extension)
             .fileSizeBytes(file.getSize())
-            .storagePath(filePath.toString())
+            .storagePath(storageKey)
             .status(Document.ProcessingStatus.PENDING)
             .build();
 
@@ -221,12 +224,13 @@ public class DocumentService {
         // Invalidate cache entries referencing this document
         cacheService.invalidateByDocument(documentId);
 
-        // Delete file from disk
+        // Delete the stored object (S3 / LocalStack or local disk, behind
+        // DocumentStorageService). Delete is idempotent by interface contract.
         if (doc.getStoragePath() != null) {
             try {
-                Files.deleteIfExists(Path.of(doc.getStoragePath()));
-            } catch (IOException e) {
-                log.warn("Failed to delete file from disk: {}", doc.getStoragePath(), e);
+                storageService.delete(doc.getStoragePath());
+            } catch (Exception e) {
+                log.warn("Failed to delete stored object: {}", doc.getStoragePath(), e);
             }
         }
     }

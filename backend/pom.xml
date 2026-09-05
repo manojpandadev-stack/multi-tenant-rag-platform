@@ -23,8 +23,22 @@
         <pgvector.version>0.1.6</pgvector.version>
         <testcontainers.version>1.21.4</testcontainers.version>
         <langchain4j.version>0.35.0</langchain4j.version>
+        <aws.sdk.version>2.54.13</aws.sdk.version>
         <!-- micrometer + otel versions managed by Spring Boot BOM -->
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- AWS SDK v2 BOM: pins s3 + url-connection-client versions -->
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws.sdk.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Spring Boot Starters -->
@@ -203,6 +217,25 @@
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- AWS SDK v2 — S3-compatible object storage (real S3 in prod, LocalStack locally/CI) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+        </dependency>
+        <!-- Sync HTTP client for the S3 client (SDK v2 requires one on the classpath) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+        </dependency>
+
+        <!-- Testcontainers LocalStack module (official module, same pattern as the Kafka module) -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>localstack</artifactId>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

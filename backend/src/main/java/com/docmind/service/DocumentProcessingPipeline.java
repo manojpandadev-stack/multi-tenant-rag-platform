@@ -8,6 +8,7 @@ import com.docmind.model.Organization;
 import com.docmind.repository.DocumentChunkRepository;
 import com.docmind.repository.DocumentRepository;
 import com.docmind.repository.OrganizationRepository;
+import com.docmind.storage.DocumentStorageService;
 import io.micrometer.observation.annotation.Observed;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
@@ -18,6 +19,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -53,7 +55,7 @@ public class DocumentProcessingPipeline {
     private final UsageRecordingService usageRecording;
     private final ObservabilityMetrics metrics;
     private final Tracer tracer;
-
+    private final DocumentStorageService storageService;
 
     public DocumentProcessingPipeline(
             DocumentRepository documentRepository,
@@ -66,7 +68,8 @@ public class DocumentProcessingPipeline {
             SemanticCacheService cacheService,
             UsageRecordingService usageRecording,
             ObservabilityMetrics metrics,
-            Tracer tracer) {
+            Tracer tracer,
+            DocumentStorageService storageService) {
         this.documentRepository = documentRepository;
         this.chunkRepository = chunkRepository;
         this.orgRepository = orgRepository;
@@ -78,6 +81,7 @@ public class DocumentProcessingPipeline {
         this.usageRecording = usageRecording;
         this.metrics = metrics;
         this.tracer = tracer;
+        this.storageService = storageService;
     }
 
     /**
@@ -114,13 +118,22 @@ public class DocumentProcessingPipeline {
                 doc.setErrorMessage(null);
                 documentRepository.save(doc);
 
-                // Stage 1: Text extraction
-                Path filePath = Path.of(doc.getStoragePath());
-                var extractionResult = extractionService.extract(filePath, doc.getFileType());
-            if (!extractionResult.success()) {
-                failDocument(doc, extractionResult.errorMessage());
-                return;
-            }
+                // Stage 1: Text extraction.
+                // File bytes live in object storage (S3/LocalStack in prod & CI,
+                // local disk in fallback mode) — pull them out and hand the
+                // extractor a temp file. A missing/unreadable object throws,
+                // gets caught by the outer catch, and fails the document with
+                // a clear error (retry re-reads from storage).
+                byte[] fileContent = storageService.retrieve(doc.getStoragePath());
+                Path filePath = Files.createTempFile("docmind-extract-", ".bin");
+                try {
+                    Files.write(filePath, fileContent);
+
+                    var extractionResult = extractionService.extract(filePath, doc.getFileType());
+                    if (!extractionResult.success()) {
+                        failDocument(doc, extractionResult.errorMessage());
+                        return;
+                    }
 
             // Stage 2: Chunking
             Organization org = orgRepository.findById(orgId).orElseThrow();
@@ -181,6 +194,11 @@ public class DocumentProcessingPipeline {
             pipelineSpan.tag("chunks.count", String.valueOf(dbChunks.size()));
             pipelineSpan.tag("tokens.consumed", String.valueOf(embeddingResult.tokensConsumed()));
             pipelineSpan.tag("status", "READY");
+
+                } finally {
+                    // Always clean up the temp extraction file
+                    Files.deleteIfExists(filePath);
+                }
 
             } catch (Exception e) {
                 log.error("Processing failed for document {}: {}", documentId, e.getMessage(), e);
