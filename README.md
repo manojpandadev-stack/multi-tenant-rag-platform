@@ -32,7 +32,8 @@ graph TB
         BM25[PostgreSQL BM25 — tsvector + GIN index]
         RRF[Reciprocal Rank Fusion — k=60]
         RERANK[Cohere Rerank — optional per org]
-        LLM[Groq llama-3.1-70b — primary]
+        RESP[Response — ranked chunks + cache metrics]
+        LLM["LLM answer synthesis — Groq / OpenAI<br/>(Known Gap: not wired — /api/query is retrieval-only)"]
     end
 
     subgraph "Cost Optimization"
@@ -59,8 +60,9 @@ graph TB
     TENANT --> UPLOAD -->|publish DocumentUploadedEvent<br/>after commit| KAFKA --> PIPE --> EXTRACT --> CHUNK --> EMBED --> PG
     EXTRACT -.->|retrieve bytes<br/>from storage| S3
     TENANT --> CACHE
-    CACHE -->|miss| VECTOR & BM25 --> RRF --> RERANK --> LLM
-    CACHE -->|hit| LLM
+    CACHE -->|hit| RESP
+    CACHE -->|miss| VECTOR & BM25 --> RRF --> RERANK --> RESP
+    LLM -.->|deferred feature| RESP
     GW -.-> OTEL -.-> PROM -.-> GRAF
     GW --> USAGE
 ```
@@ -133,21 +135,44 @@ Every metric is tagged: ✅ Measured (from test output), ⚠️ Extrapolated (ca
 
 ## How to Run
 
-### Quick Start (3 commands)
+### Quick Start
+
+**Option A — the full stack in Docker (recommended, matches the architecture diagram):**
 
 ```bash
-# 1. Copy environment variables
+# 1. Copy environment variables and edit .env
 cp .env.example .env
-# Edit .env with your API keys (GROQ_API_KEY, OPENAI_API_KEY, COHERE_API_KEY)
-# Tests run without API keys — keys are only needed for the full pipeline
+#    API keys are optional: signup/login/query work without any keys. But uploaded
+#    documents need OPENAI_API_KEY to reach READY (the embed step calls the real
+#    embedding API — there is no no-op embedding in the running app).
 
-# 2. Start infrastructure
-docker-compose up -d postgres
+# 2. Start everything: Postgres + Kafka + LocalStack + backend + Jaeger + Prometheus + Grafana
+docker compose up -d
+#    First run builds the backend image; wait for `docker compose ps` to show it healthy.
 
-# 3. Run the application
-cd backend
-mvn spring-boot:run
+# 3. Use it
+open http://localhost:8080/swagger-ui.html   # API docs
+open http://localhost:3000                   # Grafana (admin/admin)
 ```
+
+**Option B — run the backend locally against Dockerized Postgres (lightweight dev):**
+
+```bash
+# 1. Start just the database
+docker compose up -d postgres
+
+# 2. Run the backend with the two zero-infra fallbacks (async trigger + local-disk storage)
+cd backend
+DOCMIND_PROCESSING_MODE=async DOCMIND_STORAGE_MODE=local mvn spring-boot:run
+#    PowerShell: $env:DOCMIND_PROCESSING_MODE='async'; $env:DOCMIND_STORAGE_MODE='local'
+#    then: mvn spring-boot:run
+```
+
+> **Why the fallbacks in Option B?** The defaults (`kafka` / `s3`) expect the full compose
+> environment: the compose Kafka broker publishes **no host port** (the backend container reaches
+> it at `kafka:9092`), so a locally-run JVM can't reach it, and S3 mode with an empty endpoint
+> points at real AWS. The `async` and `local` modes are first-class, documented fallback code kept
+> for exactly this purpose — one config flag each (`DOCMIND_PROCESSING_MODE`, `DOCMIND_STORAGE_MODE`).
 
 ### Seed Data and First Query
 
@@ -215,8 +240,8 @@ mvn test -Dtest=RealEmbeddingSimilarityTest   # 3 tests — requires OPENAI_API_
 ### See the Observability Stack
 
 ```bash
-# Start everything (Postgres + Jaeger + Prometheus + Grafana)
-docker-compose up -d
+# Start everything (Postgres + Kafka + LocalStack + Jaeger + Prometheus + Grafana)
+docker compose up -d
 
 # Open Grafana — pre-provisioned dashboard
 open http://localhost:3000  # admin/admin
@@ -251,7 +276,7 @@ Honesty standard (same as the rest of the project): **Measured** = a number prod
 
 - The unit/integration split is enforced with JUnit 5 `@Tag("integration")` on the eight Testcontainers-backed test classes. Plain `mvn test` (no flags) still runs everything — local behavior is unchanged.
 - Maven repo is cached between runs (`actions/setup-java` cache) and the Docker layers use `type=gha` cache, so rebuilds are fast.
-- **Status (verified on GitHub Actions, not just locally):** run #2 — first run failed and was *diagnosed from the forked-JVM thread dump*: all tests passed but Hibernate's `create-drop` schema-drop at JVM shutdown borrowed a Hikari connection after the test containers were already gone, blocking 30s (Hikari `connectionTimeout`) and tripping Surefire's 30s forked-JVM exit timeout → exit 1. Fixed by using `ddl-auto=create` in integration tests (containers are ephemeral — nothing to drop). Runs **#2 and #3 green**: full suite **89 tests, 0 failures, 0 errors** (14 classes), Docker image builds cleanly.
+- **Status (verified on GitHub Actions, not just locally):** run #2 — first run failed and was *diagnosed from the forked-JVM thread dump*: all tests passed but Hibernate's `create-drop` schema-drop at JVM shutdown borrowed a Hikari connection after the test containers were already gone, blocking 30s (Hikari `connectionTimeout`) and tripping Surefire's 30s forked-JVM exit timeout → exit 1. Fixed by using `ddl-auto=create` in integration tests (containers are ephemeral — nothing to drop). Runs **#2 through #4 green** (run #4 is the latest, on the Stage 8 §3 commit): full suite **89 tests — 0 failures, 0 errors, 3 skipped** (the real-embedding tests degrade to skip without `OPENAI_API_KEY`) across **15 test classes**, and the Docker image builds cleanly. Also verified from a **fresh `git clone` into an empty directory**: `mvn clean test` → BUILD SUCCESS with the identical 89 / 0 / 0 / 3 result — the suite has no local-state dependence.
 
 ### 2. Kafka — Event-Driven Document Processing
 
@@ -298,7 +323,7 @@ The `@Async` path is deliberately **not deleted** — `AsyncConfig` (core=2, max
 3. `kafkaProcessingFailureMarksDocumentFailed` — document with a non-existent storage path → consumer runs pipeline → `FAILED` with the extraction error (never stuck `PENDING`/`PROCESSING`)
 4. `tracePropagatesAcrossKafkaBoundary` — single trace ID spans the Kafka publish/consume boundary (see above)
 
-> **Status (honesty standard):** *Executed against real runs* — 4/4 pass locally (Docker 29.5) and on GitHub Actions (ubuntu-latest, native Docker daemon), CI runs #2 and #3 green.
+> **Status (honesty standard):** *Executed against real runs* — 4/4 pass locally (Docker 29.5) and on GitHub Actions (ubuntu-latest, native Docker daemon), CI runs #2–#4 green.
 
 ### 3. S3 Storage (via LocalStack)
 
@@ -316,7 +341,7 @@ public interface DocumentStorageService {
 ```
 
 - `S3DocumentStorageService` — AWS SDK v2 sync `S3Client` (with `UrlConnectionHttpClient` pinned explicitly, so the SDK's HTTP-client SPI auto-discovery can't pick an incompatible impl from elsewhere on the classpath).
-- `LocalDiskDocumentStorageService` — **kept as the fallback** (decision: yes, keep it). Zero-infra local dev and the pre-existing 86 tests run without any S3; the pattern matches `processing.mode=async`. Tests default to `local`; production and docker-compose default to `s3`.
+- `LocalDiskDocumentStorageService` — **kept as the fallback** (decision: yes, keep it). Zero-infra local dev and the pre-existing 86 tests run without any S3; the pattern matches `processing.mode=async`. Tests default to `local`; production and docker compose default to `s3`.
 
 **LocalStack vs real S3 — config only.** Nothing LocalStack-specific exists in production code paths:
 
@@ -337,7 +362,21 @@ Bucket, region, and endpoint are all configurable (`docmind.storage.s3.*`, env-o
 2. `deleteDocumentRemovesObjectFromS3` — delete → `HeadObject` returns **404 NoSuchKey** and the DB row is gone
 3. `tenantIsolationInObjectStorage` — org A's and org B's objects land strictly under their own prefixes; the application layer rejects org B reading **and** deleting org A's document; org A's object is untouched by the denied attempts
 
-> **Status (honesty standard):** *Executed against real runs* — 3/3 pass locally (LocalStack 4.13.1 container) and the full 89-test suite is green in CI runs #2/#3 on ubuntu-latest. Two issues found and fixed during bring-up, both documented in test comments: (1) `localstack/localstack:latest` (2026.x) now demands a `LOCALSTACK_AUTH_TOKEN` even for community services — pinned to 4.13.1, the last token-free community line, so CI needs no account/secret; (2) a `@DynamicPropertySource` supplier is re-invoked on every property resolution — an inline bucket-name UUID gave the service and the test two different buckets (the exact 404 you'd see), fixed by computing the name once into a static field.
+> **Status (honesty standard):** *Executed against real runs* — 3/3 pass locally (LocalStack 4.13.1 container) and the full 89-test suite is green in CI runs #2–#4 on ubuntu-latest. Two issues found and fixed during bring-up, both documented in test comments: (1) `localstack/localstack:latest` (2026.x) now demands a `LOCALSTACK_AUTH_TOKEN` even for community services — pinned to 4.13.1, the last token-free community line, so CI needs no account/secret; (2) a `@DynamicPropertySource` supplier is re-invoked on every property resolution — an inline bucket-name UUID gave the service and the test two different buckets (the exact 404 you'd see), fixed by computing the name once into a static field.
+
+---
+
+### 4. Deliberately Scoped Out — Stage 8, Sections 4–7
+
+The original Stage 8 plan had seven sections. Sections 1–3 — CI/CD, Kafka event-driven ingestion,
+and S3 object storage — are built, tested, and verified above. **Sections 4–7 (SQS as an
+alternative trigger, Terraform, JVM tuning, Kubernetes) were deliberately scoped out as a final
+project decision — not abandoned mid-work.** Rationale: the codebase already demonstrates the
+architectural properties those sections would have exercised (event-driven processing with
+retry-then-DLQ, cloud-portable storage behind a config-only switch, CI-enforced test correctness,
+and full observability), and the remaining sections would have added infrastructure-as-code and
+deployment surface without changing any property the code itself exhibits. The cloud-native story
+above is complete and honest as far as it goes; where it ends is a decision, not a gap.
 
 ---
 
@@ -387,7 +426,7 @@ This project is designed for demonstration and learning. Here's what would chang
 
 ### Story 2: The Cost Optimization Story
 
-> "I added hybrid search — combining BM25 keyword matching with pgvector cosine similarity, fused via Reciprocal Rank Fusion. Then I built a semantic cache: before calling the LLM, check if a semantically similar query was answered recently for this organization.
+> "I added hybrid search — combining BM25 keyword matching with pgvector cosine similarity, fused via Reciprocal Rank Fusion. Then I built a semantic cache: check whether a semantically similar query for this organization was answered recently, so the expensive retrieval/LLM path can be skipped when the answer already exists.
 >
 > The eval harness runs 30 questions across three strategies. With NoOp random vectors (proving the pipeline works, not semantic quality), vector-only hits 40%, hybrid hits 60%, hybrid+rerank hits 70%. The gap shows that BM25 catches exact keyword matches that cosine similarity misses — exactly the scenario where hybrid search adds value.
 >
@@ -403,6 +442,16 @@ This project is designed for demonstration and learning. Here's what would chang
 >
 > But the bigger lesson was what I found next: `recordQuery()` wasn't incrementing `cache_misses` at all, which meant the cache hit rate was always reported as 100% — completely wrong. A full query IS a cache miss. The test only caught this because I strengthened the concurrency test to assert exact counts, not just 'greater than zero.' That's the principle I took away: in accounting code, assert exact numbers, never ranges."
 
+### Story 4: The CI Bug That Only Failed in CI
+
+> "The first CI run failed in a way that was maddening to reproduce: locally, `mvn test` was green every single time; on GitHub Actions, all 89 tests passed — no failures, no errors — but the build still exited 1.
+>
+> I got the answer from the forked-JVM thread dump in the CI logs. Hibernate's `create-drop` schema-drop runs at JVM shutdown, and it was trying to borrow a Hikari connection *after* the Testcontainers had already been torn down. The connection attempt blocked for 30 seconds — exactly the Hikari `connectionTimeout` — which tripped Surefire's 30-second forked-JVM exit timeout and killed the build. A shutdown-ordering race between two lifecycle phases I didn't know were racing: container teardown vs. schema teardown.
+>
+> The fix was one line: use `ddl-auto=create` in the integration tests instead of `create-drop`, because the containers are ephemeral — there is nothing to drop. (Since the fix, CI runs #2 through #4 are green, and I re-verified the same result from a fresh `git clone` into an empty directory to rule out local-state dependence.)
+>
+> The lesson I keep from this one: 'all tests passed' and 'the build is green' are different claims, and when they disagree, the JVM's *exit path* is the first suspect — not the tests."
+
 ---
 
-*Built by Buffy (Codebuff) — 82 tests, 7 stages, zero phantom claims.*
+*Built by Buffy (Codebuff) — 89 tests (86 pass + 3 real-embedding tests that skip without `OPENAI_API_KEY`), 8 stages, zero phantom claims.*
